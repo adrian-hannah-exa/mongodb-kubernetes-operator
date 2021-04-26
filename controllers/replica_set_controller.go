@@ -122,8 +122,6 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return result.Failed()
 	}
 
-	// TODO insert metrics user into mdb.Spec.Users
-
 	r.log = zap.S().With("ReplicaSet", request.NamespacedName)
 	r.log.Infow("Reconciling MongoDB", "MongoDB.Spec", mdb.Spec, "MongoDB.Status", mdb.Status)
 
@@ -205,34 +203,6 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 			withPendingPhase(10),
 		)
 	}
-
-	r.log.Debug("Ensuring the prometheus-exporter exists")
-	if err := r.ensureExporterDeployment(mdb); err != nil {
-		return status.Update(r.client.Status(), &mdb,
-			statusOptions().
-				withMessage(Error, fmt.Sprintf("Error ensuring the prometheus-exporter exists: %s", err)).
-				withFailedPhase(),
-		)
-	}
-
-	r.log.Debug("Ensuring the prometheus-exporter service exists")
-	if err := r.ensureExporterService(mdb); err != nil {
-		return status.Update(r.client.Status(), &mdb,
-			statusOptions().
-				withMessage(Error, fmt.Sprintf("Error ensuring the prometheus-exporter service exists: %s", err)).
-				withFailedPhase(),
-		)
-	}
-	r.log.Debug("Ensuring the prometheus-exporter service monitor exists")
-	if err := r.ensureExporterServiceMonitor(mdb); err != nil {
-		return status.Update(r.client.Status(), &mdb,
-			statusOptions().
-				withMessage(Error, fmt.Sprintf("Error ensuring the prometheus-exporter service monitor exists: %s", err)).
-				withFailedPhase(),
-		)
-	}
-
-	// TODO create CronJob to mongodump to GCS bucket
 
 	res, err := status.Update(r.client.Status(), &mdb,
 		statusOptions().
