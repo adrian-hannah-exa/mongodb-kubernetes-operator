@@ -54,6 +54,8 @@ const (
 	clusterDNSName = "CLUSTER_DNS_NAME"
 
 	lastSuccessfulConfiguration = "mongodb.com/v1.lastSuccessfulConfiguration"
+
+	prometheusNamespace = "monitoring"
 )
 
 func init() {
@@ -581,6 +583,49 @@ func buildStatefulSetModificationFunction(mdb mdbv1.MongoDBCommunity) statefulse
 
 		statefulset.WithCustomSpecs(mdb.Spec.StatefulSetConfiguration.SpecWrapper.Spec),
 	)
+}
+
+func (r *ReplicaSetReconciler) ensureExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) error {
+	svcMon := buildExporterServiceMonitor(mdb)
+	data, err := r.client.RESTClient().
+		Get().
+		AbsPath("/apis/monitoring.coreos.com/v1").
+		Namespace(prometheusNamespace).
+		Resource("ServiceMonitor").
+		Body(svcMon).
+		DoRaw(context.TODO())
+
+// buildExporterServiceMonitor creates a ServiceMonitor that will be used for the Prometheus Exporter
+func buildExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) &ServiceMonitor {
+	return &ServiceMonitor {
+		TypeMeta: metav1.TypeMeta {
+			APIVersion: "monitoring.coreos.com/v1"
+			Kind: "ServiceMonitor"
+		}
+		ObjectMeta: metav1.ObjectMeta {
+			Name: mdb.Name() + "-exporter"
+			Namespace: prometheusNamespace
+			Labels: struct {
+				"prometheus": "prometheus"
+			}
+		}
+		Spec: struct {
+			Endpoints: struct {
+				Interval: "30s"
+				Path: "/metrics"
+				Scheme: "http"
+				ScrapeTimeout: "30s"
+			}
+			NamespaceSelector: struct {
+				MatchNames: [m.Namespace()]
+			}
+			Selector: metav1.LabelSelector {
+				MatchLabels: struct {
+					"app": mdb.Name() + '-exporter-svc'
+				}
+			}
+		}
+	}
 }
 
 func getOwnerReference(mdb mdbv1.MongoDBCommunity) metav1.OwnerReference {
