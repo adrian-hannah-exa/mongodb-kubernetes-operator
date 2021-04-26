@@ -143,6 +143,15 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		)
 	}
 
+	r.log.Debug("Ensuring the exporter service exists")
+	if err := r.ensureExporterService(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the exporter service exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
 	isTLSValid, err := r.validateTLSConfig(mdb)
 	if err != nil {
 		return status.Update(r.client.Status(), &mdb,
@@ -375,6 +384,16 @@ func (r *ReplicaSetReconciler) deployMongoDBReplicaSet(mdb mdbv1.MongoDBCommunit
 		})
 }
 
+func (r *ReplicaSetReconciler) ensureExporterService(mdb mdbv1.MongoDBCommunity) error {
+	svc := buildExporterService(mdb)
+	err := r.client.Create(context.TODO(), &svc)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The exporter service already exists... moving forward: %s", err)
+		return nil
+	}
+	return err
+}
+
 func (r *ReplicaSetReconciler) ensureService(mdb mdbv1.MongoDBCommunity) error {
 	svc := buildService(mdb)
 	err := r.client.Create(context.TODO(), &svc)
@@ -433,6 +452,21 @@ func buildAutomationConfig(mdb mdbv1.MongoDBCommunity, auth automationconfig.Aut
 		SetAuth(auth).
 		AddModifications(getMongodConfigModification(mdb)).
 		AddModifications(modifications...).
+		Build()
+}
+
+// buildExporterService creates a Service that will be used for the prometheus exporter
+func buildExporterService(mdb mdbv1.MongoDBCommunity) corev1.Service {
+	label := make(map[string]string)
+	label["app"] = mdb.ServiceName()
+	return service.Builder().
+		SetName(mdb.Name() + '-exporter-svc').
+		SetNamespace(mdb.Namespace).
+		SetSelector(label).
+		SetServiceType(corev1.ServiceTypeClusterIP).
+		SetClusterIP("None").
+		SetPort(9216).
+		SetPublishNotReadyAddresses(true).
 		Build()
 }
 
