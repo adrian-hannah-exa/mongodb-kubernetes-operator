@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	AgentName   = "mongodb-agent"
-	MongodbName = "mongod"
+	AgentName    = "mongodb-agent"
+	MongodbName  = "mongod"
+	ExporterName = "mongodb-exporter"
 
 	versionUpgradeHookName         = "mongod-posthook"
 	ReadinessProbeContainerName    = "mongodb-agent-readinessprobe"
@@ -49,6 +50,11 @@ const (
 	keyfileFilePath        = "/var/lib/mongodb-mms-automation/authentication/keyfile"
 
 	automationAgentOptions = " -skipMongoStart -noDaemonize -useLocalMongoDbTools"
+
+	ExporterImageRepo       = "ssheehy/mongodb-exporter"
+	ExporterImageTag        = "0.10.0"
+	ExporterImagePullPolicy = corev1.PullIfNotPresent
+	ExporterPort            = 9216
 
 	MongodbUserCommand = `current_uid=$(id -u)
 declare -r current_uid
@@ -164,6 +170,7 @@ func BuildMongoDBReplicaSetStatefulSetModificationFunction(mdb MongoDBStatefulSe
 				podtemplatespec.WithServiceAccount(operatorServiceAccountName),
 				podtemplatespec.WithContainer(AgentName, mongodbAgentContainer(mdb.AutomationConfigSecretName(), mongodbAgentVolumeMounts)),
 				podtemplatespec.WithContainer(MongodbName, mongodbContainer(mdb.GetMongoDBVersion(), mongodVolumeMounts)),
+				podtemplatespec.WithContainer(ExporterName, exporterContainer(mdb.Name())),
 				podtemplatespec.WithInitContainer(versionUpgradeHookName, versionUpgradeHookInit([]corev1.VolumeMount{hooksVolumeMount})),
 				podtemplatespec.WithInitContainer(ReadinessProbeContainerName, readinessProbeInit([]corev1.VolumeMount{scriptsVolumeMount})),
 			),
@@ -314,4 +321,76 @@ exec mongod -f %s;
 
 		securityContext,
 	)
+}
+
+func exporterContainer(mongo_name string) container.Modification {
+
+	return container.Apply(
+		container.WithName(ExporterName),
+		container.WithImage(ExporterImageRepo + ":" + ExporterImageTag),
+		container.WithImagePullPolicy(ExporterImagePullPolicy),
+		container.WithResourceRequirements(resourcerequirements.Defaults()),
+		container.WithArgs(
+			[
+				"--web.listen-address=" + ExporterPort,
+				"--collect.collection",
+				"--collect.database",
+				"--collect.indexusage",
+				"--collect.topmetrics",
+				"--collect.connpoolstats",
+			]
+		),
+		container.WithPorts(
+			[
+				corev1.ContainerPort {
+					Name: "metrics",
+					ContainerPort: ExporterPort,
+					Protocol: corev1.ProtocolTCP,
+				},
+			]
+		),
+		container.WithReadinessProbe(
+			corev1.Probe {
+				Handler: corev1.Handler {
+					HTTPGet: corev1.HTTPGetAction {
+						Path: "/",
+						Port: "metrics",
+					}
+				}
+				InitialDelaySeconds: 10,
+			}
+		),
+		container.WithLivenessProbe(
+			corev1.Probe {
+				Handler: corev1.Handler {
+					HTTPGet: corev1.HTTPGetAction {
+						Path: "/",
+						Port: "metrics",
+					}
+				}
+				InitialDelaySeconds: 10,
+			}
+		),
+		container.WithEnvs(
+			corev1.EnvVar{
+				Name:  "MONGODB_URI",
+				ValueFrom: corev1.EnvVarSource {
+					SecretKeyRef: corev1.SecretKeySelector {
+						Key: mongo_name + '-uri',
+					},
+				},
+			}
+		),
+		container.WithSecurityContext(
+			corev1.SecurityContext {
+				AllowPrivilegeEscalation: false,
+				ReadOnlyRootFilesystem: true,
+				RunAsNonRoot: true,
+				RunAsUser: 10000,
+				RunAsGroup: 10000,
+				Capabilities: corev1.Capabilities {
+					Drop: ["all"],
+				},
+			}
+		),
 }
