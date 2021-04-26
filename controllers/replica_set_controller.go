@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"rand"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
 
@@ -30,6 +31,7 @@ import (
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/annotations"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/podtemplatespec"
+	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/secret"
 
 	mdbv1 "github.com/mongodb/mongodb-kubernetes-operator/api/v1"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/automationconfig"
@@ -55,6 +57,7 @@ const (
 
 	lastSuccessfulConfiguration = "mongodb.com/v1.lastSuccessfulConfiguration"
 
+	metricsUsername     = "metrics"
 	prometheusNamespace = "monitoring"
 )
 
@@ -122,6 +125,34 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		r.log.Errorf("Error reconciling MongoDB resource: %s", err)
 		// Error reading the object - requeue the request.
 		return result.Failed()
+	}
+
+	if err := ensureMetricsUserSecret(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the MongoDB URI secret exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
+	mdb.Spec.Users = append(mdb.Spec.Users, mdbv1.MongoDBUser{
+		Name: metricsUsername
+		PasswordSecretRef: mdb.Name() + "-metrics-user"
+		Roles: [
+			mdbv1.Role {
+				Name: "clusterMonitor"
+				DB: "admin"
+			}
+		]
+	})
+
+	r.log.Debug("Ensuring the MongoDB URI secret exists")
+	if err := r.ensureMongoDbUriSecret(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the MongoDB URI secret exists: %s", err)).
+				withFailedPhase(),
+		)
 	}
 
 	r.log = zap.S().With("ReplicaSet", request.NamespacedName)
@@ -406,6 +437,61 @@ func (r *ReplicaSetReconciler) ensureService(mdb mdbv1.MongoDBCommunity) error {
 	return err
 }
 
+func (r *ReplicaSetReconciler) ensureMongoDbUriSecret(mdb mdbv1.MongoDBCommunity) error {
+	password, err := secret.ReadKey(
+		r.client,
+		mdb.Name() + '-metrics-user',
+		'password'
+	)
+	if err != nil {
+		return err
+	}
+
+	uri_secret := buildMongoDbUriSecret(mdb)
+	err := r.client.Create(context.TODO(), &uri_secret)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The mongodb URI secret already exists... moving forward: %s", err)
+		return nil
+	}
+	return err
+}
+
+func (r *ReplicaSetReconciler) ensureMetricsUserSecret(mdb mdbv1.MongoDBCommunity) error {
+	metricsSecret := corev1.Secret{}
+	err := r.client.Get(
+		context.TODO(),
+		types.NamespacedName {
+			Name: mdb.Name() + '-metrics-user',
+			Namespace: mdb.Namespace()
+		},
+		&metricsSecret
+	)
+	err = k8sClient.IgnoreNotFound(err)
+	if err != nil {
+		return errors.Errorf("error getting metrics Secret: %s", err)
+	}
+	if metricsSecret == (corev1.Secret{}) {
+		var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+		password := make([]rune, 32)
+		for i := range password {
+			password[i] = letters[rand.Intn(len(letters))]
+		}
+
+		metricsSecret := secret.Builder().
+			SetName(mdb.Name() + '-metrics-user').
+			SetNamespace(mdb.Namespace).
+			SetField("password", password).
+			Build()
+		err := r.client.Create(context.TODO(), &metricsSecret)
+		if err != nil && apiErrors.IsAlreadyExists(err) {
+			r.log.Infof("The metrics user secret already exists... moving forward: %s", err)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func (r *ReplicaSetReconciler) createOrUpdateStatefulSet(mdb mdbv1.MongoDBCommunity) error {
 	set := appsv1.StatefulSet{}
 	err := r.client.Get(context.TODO(), mdb.NamespacedName(), &set)
@@ -454,6 +540,22 @@ func buildAutomationConfig(mdb mdbv1.MongoDBCommunity, auth automationconfig.Aut
 		SetAuth(auth).
 		AddModifications(getMongodConfigModification(mdb)).
 		AddModifications(modifications...).
+		Build()
+}
+
+// buildMongoDbUriSecret creates a Secret that will be used by the prometheus exporter
+func buildMongoDbUriSecret(mdb mdbv1.MongoDBCommunity, password string) corev1.Secret {
+	fullUri := fmt.Sprintf(
+		'mongodb://%s:%s@%s.%s.svc.cluster.local',
+		metricsUsername,
+		password,
+		mdb.ServiceName(),
+		mdb.Namespace()
+	)
+	return secret.Builder().
+		SetName(mdb.Name() + '-uri').
+		SetNamespace(mdb.Namespace).
+		SetField("mongodb-uri", fullUri).
 		Build()
 }
 
