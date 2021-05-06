@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
-	"rand"
+        "reflect"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
 
@@ -33,6 +34,8 @@ import (
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/podtemplatespec"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/secret"
 
+	monitoringv1"github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+
 	mdbv1 "github.com/mongodb/mongodb-kubernetes-operator/api/v1"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/automationconfig"
 	kubernetesClient "github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/client"
@@ -59,6 +62,7 @@ const (
 
 	metricsUsername     = "metrics"
 	prometheusNamespace = "monitoring"
+	prometheusName      = "prometheus"
 )
 
 func init() {
@@ -127,7 +131,7 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return result.Failed()
 	}
 
-	if err := ensureMetricsUserSecret(mdb); err != nil {
+	if err := r.ensureMetricsUserSecret(mdb); err != nil {
 		return status.Update(r.client.Status(), &mdb,
 			statusOptions().
 				withMessage(Error, fmt.Sprintf("Error ensuring the MongoDB URI secret exists: %s", err)).
@@ -136,14 +140,14 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 	}
 
 	mdb.Spec.Users = append(mdb.Spec.Users, mdbv1.MongoDBUser{
-		Name: metricsUsername
-		PasswordSecretRef: mdb.Name() + "-metrics-user"
-		Roles: [
-			mdbv1.Role {
-				Name: "clusterMonitor"
-				DB: "admin"
-			}
-		]
+		Name: metricsUsername,
+		PasswordSecretRef: mdbv1.SecretKeyReference{Name: mdb.Name + "-metrics-user"},
+		Roles: []mdbv1.Role {
+			mdbv1.Role{
+				Name: "clusterMonitor",
+				DB: "admin",
+			},
+		},
 	})
 
 	r.log.Debug("Ensuring the MongoDB URI secret exists")
@@ -440,15 +444,18 @@ func (r *ReplicaSetReconciler) ensureService(mdb mdbv1.MongoDBCommunity) error {
 func (r *ReplicaSetReconciler) ensureMongoDbUriSecret(mdb mdbv1.MongoDBCommunity) error {
 	password, err := secret.ReadKey(
 		r.client,
-		mdb.Name() + '-metrics-user',
-		'password'
+	       "password",
+		types.NamespacedName {
+			Name: mdb.Name + "-metrics-user",
+			Namespace: mdb.Namespace,
+		},
 	)
 	if err != nil {
 		return err
 	}
 
-	uri_secret := buildMongoDbUriSecret(mdb)
-	err := r.client.Create(context.TODO(), &uri_secret)
+	uri_secret := buildMongoDbUriSecret(mdb, password)
+	err = r.client.Create(context.TODO(), &uri_secret)
 	if err != nil && apiErrors.IsAlreadyExists(err) {
 		r.log.Infof("The mongodb URI secret already exists... moving forward: %s", err)
 		return nil
@@ -461,16 +468,16 @@ func (r *ReplicaSetReconciler) ensureMetricsUserSecret(mdb mdbv1.MongoDBCommunit
 	err := r.client.Get(
 		context.TODO(),
 		types.NamespacedName {
-			Name: mdb.Name() + '-metrics-user',
-			Namespace: mdb.Namespace()
+			Name: mdb.Name + "-metrics-user",
+			Namespace: mdb.Namespace,
 		},
-		&metricsSecret
+		&metricsSecret,
 	)
 	err = k8sClient.IgnoreNotFound(err)
 	if err != nil {
 		return errors.Errorf("error getting metrics Secret: %s", err)
 	}
-	if metricsSecret == (corev1.Secret{}) {
+	if reflect.DeepEqual(metricsSecret, corev1.Secret{}) { // metricsSecret == corev1.Secret{}) {
 		var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 		password := make([]rune, 32)
 		for i := range password {
@@ -478,9 +485,9 @@ func (r *ReplicaSetReconciler) ensureMetricsUserSecret(mdb mdbv1.MongoDBCommunit
 		}
 
 		metricsSecret := secret.Builder().
-			SetName(mdb.Name() + '-metrics-user').
+			SetName(mdb.Name + "-metrics-user").
 			SetNamespace(mdb.Namespace).
-			SetField("password", password).
+			SetField("password", string(password)).
 			Build()
 		err := r.client.Create(context.TODO(), &metricsSecret)
 		if err != nil && apiErrors.IsAlreadyExists(err) {
@@ -546,14 +553,14 @@ func buildAutomationConfig(mdb mdbv1.MongoDBCommunity, auth automationconfig.Aut
 // buildMongoDbUriSecret creates a Secret that will be used by the prometheus exporter
 func buildMongoDbUriSecret(mdb mdbv1.MongoDBCommunity, password string) corev1.Secret {
 	fullUri := fmt.Sprintf(
-		'mongodb://%s:%s@%s.%s.svc.cluster.local',
+		"mongodb://%s:%s@%s.%s.svc.cluster.local",
 		metricsUsername,
 		password,
 		mdb.ServiceName(),
-		mdb.Namespace()
+		mdb.Namespace,
 	)
 	return secret.Builder().
-		SetName(mdb.Name() + '-uri').
+		SetName(mdb.Name + "-uri").
 		SetNamespace(mdb.Namespace).
 		SetField("mongodb-uri", fullUri).
 		Build()
@@ -564,8 +571,9 @@ func buildExporterService(mdb mdbv1.MongoDBCommunity) corev1.Service {
 	label := make(map[string]string)
 	label["app"] = mdb.ServiceName()
 	return service.Builder().
-		SetName(mdb.Name() + '-exporter-svc').
+		SetName(mdb.Name + "-exporter-svc").
 		SetNamespace(mdb.Namespace).
+		SetLabels(label).
 		SetSelector(label).
 		SetServiceType(corev1.ServiceTypeClusterIP).
 		SetClusterIP("None").
@@ -689,44 +697,46 @@ func buildStatefulSetModificationFunction(mdb mdbv1.MongoDBCommunity) statefulse
 
 func (r *ReplicaSetReconciler) ensureExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) error {
 	svcMon := buildExporterServiceMonitor(mdb)
-	data, err := r.client.RESTClient().
-		Get().
-		AbsPath("/apis/monitoring.coreos.com/v1").
-		Namespace(prometheusNamespace).
-		Resource("ServiceMonitor").
-		Body(svcMon).
-		DoRaw(context.TODO())
+	err := r.client.Create(context.TODO(), &svcMon)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The service monitoralready exists... moving forward: %s", err)
+		return nil
+	}
+	return err
+}
 
 // buildExporterServiceMonitor creates a ServiceMonitor that will be used for the Prometheus Exporter
-func buildExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) &ServiceMonitor {
-	return &ServiceMonitor {
-		TypeMeta: metav1.TypeMeta {
-			APIVersion: "monitoring.coreos.com/v1"
-			Kind: "ServiceMonitor"
-		}
-		ObjectMeta: metav1.ObjectMeta {
-			Name: mdb.Name() + "-exporter"
-			Namespace: prometheusNamespace
-			Labels: struct {
-				"prometheus": "prometheus"
-			}
-		}
-		Spec: struct {
-			Endpoints: struct {
-				Interval: "30s"
-				Path: "/metrics"
-				Scheme: "http"
-				ScrapeTimeout: "30s"
-			}
-			NamespaceSelector: struct {
-				MatchNames: [m.Namespace()]
-			}
-			Selector: metav1.LabelSelector {
-				MatchLabels: struct {
-					"app": mdb.Name() + '-exporter-svc'
-				}
-			}
-		}
+func buildExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) monitoringv1.ServiceMonitor{
+	return monitoringv1.ServiceMonitor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "monitoring.coreos.com/v1",
+			Kind: "ServiceMonitor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: mdb.Name + "-exporter",
+			Namespace: prometheusNamespace,
+			Labels: map[string]string{
+				"prometheus": prometheusName,
+			},
+		},
+		Spec: monitoringv1.ServiceMonitorSpec{
+			Endpoints: []monitoringv1.Endpoint{
+                        	monitoringv1.Endpoint{
+					Interval: "30s",
+					Path: "/metrics",
+					Scheme: "http",
+					ScrapeTimeout: "30s",
+				},
+			},
+			NamespaceSelector: monitoringv1.NamespaceSelector{
+				MatchNames: []string{mdb.Namespace},
+			},
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": mdb.Name + "-exporter-svc",
+				},
+			},
+		},
 	}
 }
 

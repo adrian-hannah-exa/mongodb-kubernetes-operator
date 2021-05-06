@@ -170,7 +170,7 @@ func BuildMongoDBReplicaSetStatefulSetModificationFunction(mdb MongoDBStatefulSe
 				podtemplatespec.WithServiceAccount(operatorServiceAccountName),
 				podtemplatespec.WithContainer(AgentName, mongodbAgentContainer(mdb.AutomationConfigSecretName(), mongodbAgentVolumeMounts)),
 				podtemplatespec.WithContainer(MongodbName, mongodbContainer(mdb.GetMongoDBVersion(), mongodVolumeMounts)),
-				podtemplatespec.WithContainer(ExporterName, exporterContainer(mdb.Name())),
+				podtemplatespec.WithContainer(ExporterName, exporterContainer(mdb.GetName())),
 				podtemplatespec.WithInitContainer(versionUpgradeHookName, versionUpgradeHookInit([]corev1.VolumeMount{hooksVolumeMount})),
 				podtemplatespec.WithInitContainer(ReadinessProbeContainerName, readinessProbeInit([]corev1.VolumeMount{scriptsVolumeMount})),
 			),
@@ -287,7 +287,7 @@ func mongodbContainer(version string, volumeMounts []corev1.VolumeMount) contain
 /hooks/version-upgrade
 
 # wait for config and keyfile to be created by the agent
- while ! [ -f %s -a -f %s ]; do sleep 3 ; done ; sleep 2 ;
+while ! [ -f %s -a -f %s ]; do sleep 3 ; done ; sleep 2 ;
 
 
 # start mongod with this configuration
@@ -331,66 +331,70 @@ func exporterContainer(mongo_name string) container.Modification {
 		container.WithImagePullPolicy(ExporterImagePullPolicy),
 		container.WithResourceRequirements(resourcerequirements.Defaults()),
 		container.WithArgs(
-			[
-				"--web.listen-address=" + ExporterPort,
+			[]string{
+				"--web.listen-address=" + string(ExporterPort),
 				"--collect.collection",
 				"--collect.database",
 				"--collect.indexusage",
 				"--collect.topmetrics",
 				"--collect.connpoolstats",
-			]
+			},
 		),
 		container.WithPorts(
-			[
+			[]corev1.ContainerPort{
 				corev1.ContainerPort {
 					Name: "metrics",
 					ContainerPort: ExporterPort,
 					Protocol: corev1.ProtocolTCP,
 				},
-			]
+			},
 		),
 		container.WithReadinessProbe(
-			corev1.Probe {
-				Handler: corev1.Handler {
-					HTTPGet: corev1.HTTPGetAction {
-						Path: "/",
-						Port: "metrics",
-					}
-				}
-				InitialDelaySeconds: 10,
-			}
+			probes.Apply(
+				probes.WithHandler(
+					corev1.Handler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Path: "/",
+						},
+					},
+				),
+				probes.WithInitialDelaySeconds(10),
+			),
 		),
 		container.WithLivenessProbe(
-			corev1.Probe {
-				Handler: corev1.Handler {
-					HTTPGet: corev1.HTTPGetAction {
-						Path: "/",
-						Port: "metrics",
-					}
-				}
-				InitialDelaySeconds: 10,
-			}
+			probes.Apply(
+				probes.WithHandler(
+					corev1.Handler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Path: "/",
+						},
+					},
+				),
+				probes.WithInitialDelaySeconds(10),
+			),
 		),
 		container.WithEnvs(
 			corev1.EnvVar{
 				Name:  "MONGODB_URI",
-				ValueFrom: corev1.EnvVarSource {
-					SecretKeyRef: corev1.SecretKeySelector {
-						Key: mongo_name + '-uri',
+				ValueFrom: &corev1.EnvVarSource {
+					SecretKeyRef: &corev1.SecretKeySelector {
+						Key: mongo_name + "-uri",
 					},
 				},
-			}
+			},
 		),
 		container.WithSecurityContext(
 			corev1.SecurityContext {
-				AllowPrivilegeEscalation: false,
-				ReadOnlyRootFilesystem: true,
-				RunAsNonRoot: true,
-				RunAsUser: 10000,
-				RunAsGroup: 10000,
-				Capabilities: corev1.Capabilities {
-					Drop: ["all"],
+				AllowPrivilegeEscalation: &[]bool{false}[0],
+				ReadOnlyRootFilesystem: &[]bool{true}[0],
+				RunAsNonRoot: &[]bool{true}[0],
+				RunAsUser: &[]int64{10000}[0],
+				RunAsGroup: &[]int64{10000}[0],
+				Capabilities: &corev1.Capabilities {
+					Drop: []corev1.Capability{"all"},
 				},
-			}
+			},
 		),
+	)
+
 }
