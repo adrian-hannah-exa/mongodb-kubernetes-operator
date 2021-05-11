@@ -329,7 +329,7 @@ func exporterContainer(mongoName string) container.Modification {
 
 	return container.Apply(
 		container.WithName(ExporterName),
-		container.WithImage(ExporterImageRepo + ":" + ExporterImageTag),
+		container.WithImage(ExporterImageRepo+":"+ExporterImageTag),
 		container.WithImagePullPolicy(ExporterImagePullPolicy),
 		container.WithResourceRequirements(resourcerequirements.Defaults()),
 		container.WithArgs(
@@ -339,10 +339,10 @@ func exporterContainer(mongoName string) container.Modification {
 		),
 		container.WithPorts(
 			[]corev1.ContainerPort{
-				corev1.ContainerPort {
-					Name: "metrics",
+				corev1.ContainerPort{
+					Name:          "metrics",
 					ContainerPort: ExporterPort,
-					Protocol: corev1.ProtocolTCP,
+					Protocol:      corev1.ProtocolTCP,
 				},
 			},
 		),
@@ -374,9 +374,9 @@ func exporterContainer(mongoName string) container.Modification {
 		),
 		container.WithEnvs(
 			corev1.EnvVar{
-				Name:  "MONGODB_URI",
-				ValueFrom: &corev1.EnvVarSource {
-					SecretKeyRef: &corev1.SecretKeySelector {
+				Name: "MONGODB_URI",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
 						LocalObjectReference: corev1.LocalObjectReference{
 							Name: mongoName + "-uri",
 						},
@@ -386,13 +386,13 @@ func exporterContainer(mongoName string) container.Modification {
 			},
 		),
 		container.WithSecurityContext(
-			corev1.SecurityContext {
+			corev1.SecurityContext{
 				AllowPrivilegeEscalation: &[]bool{false}[0],
-				ReadOnlyRootFilesystem: &[]bool{true}[0],
-				RunAsNonRoot: &[]bool{true}[0],
-				RunAsUser: &[]int64{10000}[0],
-				RunAsGroup: &[]int64{10000}[0],
-				Capabilities: &corev1.Capabilities {
+				ReadOnlyRootFilesystem:   &[]bool{true}[0],
+				RunAsNonRoot:             &[]bool{true}[0],
+				RunAsUser:                &[]int64{10000}[0],
+				RunAsGroup:               &[]int64{10000}[0],
+				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"all"},
 				},
 			},

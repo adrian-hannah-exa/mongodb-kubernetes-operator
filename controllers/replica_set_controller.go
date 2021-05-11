@@ -144,17 +144,17 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 	}
 
 	mdb.Spec.Users = append(mdb.Spec.Users, mdbv1.MongoDBUser{
-		Name: metricsUsername,
-		DB: "admin",
+		Name:              metricsUsername,
+		DB:                "admin",
 		PasswordSecretRef: mdbv1.SecretKeyReference{Name: mdb.Name + "-metrics-user"},
-		Roles: []mdbv1.Role {
+		Roles: []mdbv1.Role{
 			mdbv1.Role{
 				Name: "clusterMonitor",
-				DB: "admin",
+				DB:   "admin",
 			},
 			mdbv1.Role{
 				Name: "read",
-				DB: "local",
+				DB:   "local",
 			},
 		},
 		ScramCredentialsSecretName: mdb.Name + "-metrics-user",
@@ -464,8 +464,8 @@ func (r *ReplicaSetReconciler) ensureMongoDbUriSecret(mdb mdbv1.MongoDBCommunity
 	password, err := secret.ReadKey(
 		r.client,
 		"password",
-		types.NamespacedName {
-			Name: mdb.Name + "-metrics-user",
+		types.NamespacedName{
+			Name:      mdb.Name + "-metrics-user",
 			Namespace: mdb.Namespace,
 		},
 	)
@@ -486,8 +486,8 @@ func (r *ReplicaSetReconciler) ensureMetricsUserSecret(mdb mdbv1.MongoDBCommunit
 	metricsSecret := corev1.Secret{}
 	err := r.client.Get(
 		context.TODO(),
-		types.NamespacedName {
-			Name: mdb.Name + "-metrics-user",
+		types.NamespacedName{
+			Name:      mdb.Name + "-metrics-user",
 			Namespace: mdb.Namespace,
 		},
 		&metricsSecret,
@@ -504,7 +504,7 @@ func (r *ReplicaSetReconciler) ensureMetricsUserSecret(mdb mdbv1.MongoDBCommunit
 		}
 
 		metricsSecret := secret.Builder().
-			SetName(mdb.Name + "-metrics-user").
+			SetName(mdb.Name+"-metrics-user").
 			SetNamespace(mdb.Namespace).
 			SetField("password", string(password)).
 			Build()
@@ -579,7 +579,7 @@ func buildMongoDbUriSecret(mdb mdbv1.MongoDBCommunity, password string) corev1.S
 		mdb.Name,
 	)
 	return secret.Builder().
-		SetName(mdb.Name + "-uri").
+		SetName(mdb.Name+"-uri").
 		SetNamespace(mdb.Namespace).
 		SetField("mongodb-uri", fullUri).
 		Build()
@@ -718,10 +718,10 @@ func (r *ReplicaSetReconciler) ensureExporterServiceMonitor(mdb mdbv1.MongoDBCom
 	svcMon := &monitoringv1.ServiceMonitor{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "monitoring.coreos.com/v1",
-			Kind: "ServiceMonitor",
+			Kind:       "ServiceMonitor",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: mdb.Name + "-exporter",
+			Name:      mdb.Name + "-exporter",
 			Namespace: prometheusNamespace,
 			Labels: map[string]string{
 				"prometheus": prometheusName,
@@ -730,9 +730,9 @@ func (r *ReplicaSetReconciler) ensureExporterServiceMonitor(mdb mdbv1.MongoDBCom
 		Spec: monitoringv1.ServiceMonitorSpec{
 			Endpoints: []monitoringv1.Endpoint{
 				monitoringv1.Endpoint{
-					Interval: "30s",
-					Path: "/metrics",
-					Scheme: "http",
+					Interval:      "30s",
+					Path:          "/metrics",
+					Scheme:        "http",
 					ScrapeTimeout: "30s",
 				},
 			},
