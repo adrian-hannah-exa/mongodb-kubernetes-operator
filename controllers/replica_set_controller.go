@@ -63,7 +63,7 @@ const (
 
 	metricsUsername     = "metrics"
 	prometheusNamespace = "monitoring"
-	prometheusName      = "prometheus"
+	prometheusName      = "app-prometheus"
 )
 
 func init() {
