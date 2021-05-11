@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
@@ -141,22 +142,28 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		)
 	}
 
-	mdb.Spec.Users = append(mdb.Spec.Users, mdbv1.MongoDBUser{
-		Name:              metricsUsername,
-		DB:                "admin",
-		PasswordSecretRef: mdbv1.SecretKeyReference{Name: mdb.Name + "-metrics-user"},
-		Roles: []mdbv1.Role{
-			mdbv1.Role{
-				Name: "clusterMonitor",
-				DB:   "admin",
-			},
-			mdbv1.Role{
-				Name: "read",
-				DB:   "local",
-			},
-		},
-		ScramCredentialsSecretName: mdb.Name + "-metrics-user",
+	idx := sort.Search(len(mdb.Spec.Users), func(i int) bool {
+		return string(mdb.Spec.Users[i].Name) == metricsUsername
 	})
+
+	if idx == -1 {
+		mdb.Spec.Users = append(mdb.Spec.Users, mdbv1.MongoDBUser{
+			Name:              metricsUsername,
+			DB:                "admin",
+			PasswordSecretRef: mdbv1.SecretKeyReference{Name: mdb.Name + "-metrics-user"},
+			Roles: []mdbv1.Role{
+				mdbv1.Role{
+					Name: "clusterMonitor",
+					DB:   "admin",
+				},
+				mdbv1.Role{
+					Name: "read",
+					DB:   "local",
+				},
+			},
+			ScramCredentialsSecretName: mdb.Name + "-metrics-user",
+		})
+	}
 
 	r.log.Debug("Ensuring the MongoDB URI secret exists")
 	if err := r.ensureMongoDbUriSecret(mdb); err != nil {
