@@ -134,10 +134,11 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return result.Failed()
 	}
 
+	r.log.Debug("Ensuring the MongoDB metrics user secret exists")
 	if err := r.ensureMetricsUserSecret(mdb); err != nil {
 		return status.Update(r.client.Status(), &mdb,
 			statusOptions().
-				withMessage(Error, fmt.Sprintf("Error ensuring the MongoDB URI secret exists: %s", err)).
+				withMessage(Error, fmt.Sprintf("Error ensuring the metrics user secret exists: %s", err)).
 				withFailedPhase(),
 		)
 	}
