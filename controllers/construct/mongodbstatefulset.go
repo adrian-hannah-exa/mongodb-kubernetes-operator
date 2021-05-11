@@ -3,6 +3,7 @@ package construct
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/automationconfig"
@@ -51,8 +52,8 @@ const (
 
 	automationAgentOptions = " -skipMongoStart -noDaemonize -useLocalMongoDbTools"
 
-	ExporterImageRepo       = "ssheehy/mongodb-exporter"
-	ExporterImageTag        = "0.10.0"
+	ExporterImageRepo       = "bitnami/mongodb-exporter"
+	ExporterImageTag        = "0.20.4"
 	ExporterImagePullPolicy = corev1.PullIfNotPresent
 	ExporterPort            = 9216
 
@@ -332,12 +333,7 @@ func exporterContainer(mongoName string) container.Modification {
 		container.WithResourceRequirements(resourcerequirements.Defaults()),
 		container.WithArgs(
 			[]string{
-				"--web.listen-address=" + string(ExporterPort),
-				"--collect.collection",
-				"--collect.database",
-				"--collect.indexusage",
-				"--collect.topmetrics",
-				"--collect.connpoolstats",
+				"--web.listen-address=:" + strconv.Itoa(ExporterPort),
 			},
 		),
 		container.WithPorts(
