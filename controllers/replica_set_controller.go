@@ -78,6 +78,8 @@ func NewReconciler(mgr manager.Manager) *ReplicaSetReconciler {
 	mgrClient := mgr.GetClient()
 	secretWatcher := watch.New()
 
+	monitoringv1.AddToScheme(mgr.GetScheme())
+
 	return &ReplicaSetReconciler{
 		client:        kubernetesClient.NewClient(mgrClient),
 		scheme:        mgr.GetScheme(),
@@ -192,6 +194,15 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return status.Update(r.client.Status(), &mdb,
 			statusOptions().
 				withMessage(Error, fmt.Sprintf("Error ensuring the exporter service exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
+	r.log.Debug("Ensuring the exporter service monitor exists")
+	if err := r.ensureExporterServiceMonitor(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the exporter service monitor exists: %s", err)).
 				withFailedPhase(),
 		)
 	}
@@ -703,18 +714,7 @@ func buildStatefulSetModificationFunction(mdb mdbv1.MongoDBCommunity) statefulse
 }
 
 func (r *ReplicaSetReconciler) ensureExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) error {
-	svcMon := buildExporterServiceMonitor(mdb)
-	err := r.client.Create(context.TODO(), &svcMon)
-	if err != nil && apiErrors.IsAlreadyExists(err) {
-		r.log.Infof("The service monitoralready exists... moving forward: %s", err)
-		return nil
-	}
-	return err
-}
-
-// buildExporterServiceMonitor creates a ServiceMonitor that will be used for the Prometheus Exporter
-func buildExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) monitoringv1.ServiceMonitor{
-	return monitoringv1.ServiceMonitor{
+	svcMon := &monitoringv1.ServiceMonitor{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "monitoring.coreos.com/v1",
 			Kind: "ServiceMonitor",
@@ -728,7 +728,7 @@ func buildExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) monitoringv1.Servic
 		},
 		Spec: monitoringv1.ServiceMonitorSpec{
 			Endpoints: []monitoringv1.Endpoint{
-                        	monitoringv1.Endpoint{
+				monitoringv1.Endpoint{
 					Interval: "30s",
 					Path: "/metrics",
 					Scheme: "http",
@@ -740,11 +740,17 @@ func buildExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) monitoringv1.Servic
 			},
 			Selector: metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app": mdb.Name + "-exporter-svc",
+					"app": mdb.ServiceName(),
 				},
 			},
 		},
 	}
+	err := r.client.Create(context.TODO(), svcMon)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The service monitor already exists... moving forward: %s", err)
+		return nil
+	}
+	return err
 }
 
 func getOwnerReference(mdb mdbv1.MongoDBCommunity) metav1.OwnerReference {
