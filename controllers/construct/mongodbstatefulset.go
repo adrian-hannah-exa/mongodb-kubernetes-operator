@@ -17,6 +17,7 @@ import (
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/util/scale"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -351,6 +352,7 @@ func exporterContainer(mongoName string) container.Modification {
 					corev1.Handler{
 						HTTPGet: &corev1.HTTPGetAction{
 							Path: "/",
+							Port: intstr.FromString("metrics"),
 						},
 					},
 				),
@@ -363,6 +365,7 @@ func exporterContainer(mongoName string) container.Modification {
 					corev1.Handler{
 						HTTPGet: &corev1.HTTPGetAction{
 							Path: "/",
+							Port: intstr.FromString("metrics"),
 						},
 					},
 				),
