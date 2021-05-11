@@ -378,7 +378,10 @@ func exporterContainer(mongoName string) container.Modification {
 				Name:  "MONGODB_URI",
 				ValueFrom: &corev1.EnvVarSource {
 					SecretKeyRef: &corev1.SecretKeySelector {
-						Key: mongo_name + "-uri",
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: mongoName + "-uri",
+						},
+						Key: "mongodb-uri",
 					},
 				},
 			},
