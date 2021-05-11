@@ -34,7 +34,7 @@ import (
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/podtemplatespec"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/secret"
 
-	monitoringv1"github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	mdbv1 "github.com/mongodb/mongodb-kubernetes-operator/api/v1"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/automationconfig"
@@ -444,7 +444,7 @@ func (r *ReplicaSetReconciler) ensureService(mdb mdbv1.MongoDBCommunity) error {
 func (r *ReplicaSetReconciler) ensureMongoDbUriSecret(mdb mdbv1.MongoDBCommunity) error {
 	password, err := secret.ReadKey(
 		r.client,
-	       "password",
+		"password",
 		types.NamespacedName {
 			Name: mdb.Name + "-metrics-user",
 			Namespace: mdb.Namespace,

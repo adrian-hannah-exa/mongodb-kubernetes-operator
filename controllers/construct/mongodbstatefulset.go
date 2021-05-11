@@ -323,7 +323,7 @@ exec mongod -f %s;
 	)
 }
 
-func exporterContainer(mongo_name string) container.Modification {
+func exporterContainer(mongoName string) container.Modification {
 
 	return container.Apply(
 		container.WithName(ExporterName),
