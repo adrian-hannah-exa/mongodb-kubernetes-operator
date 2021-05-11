@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-        "reflect"
+	"reflect"
+	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
 
@@ -553,11 +554,11 @@ func buildAutomationConfig(mdb mdbv1.MongoDBCommunity, auth automationconfig.Aut
 // buildMongoDbUriSecret creates a Secret that will be used by the prometheus exporter
 func buildMongoDbUriSecret(mdb mdbv1.MongoDBCommunity, password string) corev1.Secret {
 	fullUri := fmt.Sprintf(
-		"mongodb://%s:%s@%s.%s.svc.cluster.local",
+		"mongodb://%s:%s@%s/?authSource=admin&replicaSet=%s&compressors=disabled&gssapiServiceName=mongodb",
 		metricsUsername,
 		password,
-		mdb.ServiceName(),
-		mdb.Namespace,
+		strings.Join(mdb.Hosts(), ","),
+		mdb.Name,
 	)
 	return secret.Builder().
 		SetName(mdb.Name + "-uri").
