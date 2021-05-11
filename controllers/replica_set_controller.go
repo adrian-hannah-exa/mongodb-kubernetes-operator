@@ -78,8 +78,6 @@ func NewReconciler(mgr manager.Manager) *ReplicaSetReconciler {
 	mgrClient := mgr.GetClient()
 	secretWatcher := watch.New()
 
-	monitoringv1.AddToScheme(mgr.GetScheme())
-
 	return &ReplicaSetReconciler{
 		client:        kubernetesClient.NewClient(mgrClient),
 		scheme:        mgr.GetScheme(),
