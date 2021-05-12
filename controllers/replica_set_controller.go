@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"os"
 	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
@@ -142,27 +141,38 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		)
 	}
 
-	idx := sort.Search(len(mdb.Spec.Users), func(i int) bool {
-		return string(mdb.Spec.Users[i].Name) == metricsUsername
-	})
-
-	if idx == -1 {
-		mdb.Spec.Users = append(mdb.Spec.Users, mdbv1.MongoDBUser{
-			Name:              metricsUsername,
-			DB:                "admin",
-			PasswordSecretRef: mdbv1.SecretKeyReference{Name: mdb.Name + "-metrics-user"},
-			Roles: []mdbv1.Role{
-				mdbv1.Role{
-					Name: "clusterMonitor",
-					DB:   "admin",
-				},
-				mdbv1.Role{
-					Name: "read",
-					DB:   "local",
-				},
+	metricsUser := mdbv1.MongoDBUser{
+		Name:              metricsUsername,
+		DB:                "admin",
+		PasswordSecretRef: mdbv1.SecretKeyReference{Name: mdb.Name + "-metrics-user"},
+		Roles: []mdbv1.Role{
+			mdbv1.Role{
+				Name: "clusterMonitor",
+				DB:   "admin",
 			},
-			ScramCredentialsSecretName: mdb.Name + "-metrics-user",
-		})
+			mdbv1.Role{
+				Name: "read",
+				DB:   "local",
+			},
+			mdbv1.Role{
+				Name: "find",
+				DB:   "admin",
+			},
+		},
+		ScramCredentialsSecretName: mdb.Name + "-metrics-user",
+	}
+
+	contains := false
+	for i, value := range mdb.Spec.Users {
+		if value.Name == "metrics" {
+			contains = true
+			mdb.Spec.Users[i] = metricsUser
+			break
+		}
+	}
+	if contains == false {
+		r.log.Debug("Adding metrics user")
+		mdb.Spec.Users = append(mdb.Spec.Users, metricsUser)
 	}
 
 	r.log.Debug("Ensuring the MongoDB URI secret exists")
