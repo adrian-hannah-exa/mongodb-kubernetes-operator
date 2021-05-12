@@ -104,6 +104,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := monitoringv1.AddToScheme(mgr.GetScheme()); err != nil {
+		setupLog.Error(err, "Unable to add monitoringv1 to scheme")
+		os.Exit(1)
+	}
+
 	// Setup Controller.
 	if err = controllers.NewReconciler(mgr).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Unable to create controller")
