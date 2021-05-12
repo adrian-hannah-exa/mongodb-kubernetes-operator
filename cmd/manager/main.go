@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	mdbv1 "github.com/mongodb/mongodb-kubernetes-operator/api/v1"
 	"github.com/mongodb/mongodb-kubernetes-operator/controllers"
 	"github.com/mongodb/mongodb-kubernetes-operator/controllers/construct"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -34,7 +34,7 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 
 	utilruntime.Must(monitoringv1.AddToScheme(scheme))
-        //+kubebuilder:scaffold:scheme
+	//+kubebuilder:scaffold:scheme
 }
 
 func configureLogger() (*zap.Logger, error) {
