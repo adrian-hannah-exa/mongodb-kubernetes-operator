@@ -79,7 +79,7 @@ func TestMongod_Container(t *testing.T) {
 }
 
 func assertStatefulSetIsBuiltCorrectly(t *testing.T, mdb mdbv1.MongoDBCommunity, sts *appsv1.StatefulSet) {
-	assert.Len(t, sts.Spec.Template.Spec.Containers, 2)
+	assert.Len(t, sts.Spec.Template.Spec.Containers, 3)
 	assert.Len(t, sts.Spec.Template.Spec.InitContainers, 2)
 	assert.Equal(t, mdb.ServiceName(), sts.Spec.ServiceName)
 	assert.Equal(t, mdb.Name, sts.Name)

@@ -3,6 +3,7 @@ package construct
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/automationconfig"
@@ -16,13 +17,15 @@ import (
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/util/scale"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	corev1 "k8s.io/api/core/v1"
 )
 
 const (
-	AgentName   = "mongodb-agent"
-	MongodbName = "mongod"
+	AgentName    = "mongodb-agent"
+	MongodbName  = "mongod"
+	ExporterName = "mongodb-exporter"
 
 	versionUpgradeHookName         = "mongod-posthook"
 	ReadinessProbeContainerName    = "mongodb-agent-readinessprobe"
@@ -47,6 +50,11 @@ const (
 	keyfileFilePath        = "/var/lib/mongodb-mms-automation/authentication/keyfile"
 
 	automationAgentOptions = " -skipMongoStart -noDaemonize -useLocalMongoDbTools"
+
+	ExporterImageRepo       = "bitnami/mongodb-exporter"
+	ExporterImageTag        = "0.20.4"
+	ExporterImagePullPolicy = corev1.PullIfNotPresent
+	ExporterPort            = 9216
 
 	MongodbUserCommand = `current_uid=$(id -u)
 declare -r current_uid
@@ -166,6 +174,7 @@ func BuildMongoDBReplicaSetStatefulSetModificationFunction(mdb MongoDBStatefulSe
 				podtemplatespec.WithServiceAccount(operatorServiceAccountName),
 				podtemplatespec.WithContainer(AgentName, mongodbAgentContainer(mdb.AutomationConfigSecretName(), mongodbAgentVolumeMounts)),
 				podtemplatespec.WithContainer(MongodbName, mongodbContainer(mdb.GetMongoDBVersion(), mongodVolumeMounts)),
+				podtemplatespec.WithContainer(ExporterName, exporterContainer(mdb.GetName())),
 				podtemplatespec.WithInitContainer(versionUpgradeHookName, versionUpgradeHookInit([]corev1.VolumeMount{hooksVolumeMount})),
 				podtemplatespec.WithInitContainer(ReadinessProbeContainerName, readinessProbeInit([]corev1.VolumeMount{scriptsVolumeMount})),
 			),
@@ -282,7 +291,7 @@ func mongodbContainer(version string, volumeMounts []corev1.VolumeMount) contain
 /hooks/version-upgrade
 
 # wait for config and keyfile to be created by the agent
- while ! [ -f %s -a -f %s ]; do sleep 3 ; done ; sleep 2 ;
+while ! [ -f %s -a -f %s ]; do sleep 3 ; done ; sleep 2 ;
 
 # with mongod configured to append logs, we need to provide them to stdout as
 # mongod does not write to stdout and a log file
@@ -320,4 +329,80 @@ exec mongod -f %s;
 
 		securityContext,
 	)
+}
+
+func exporterContainer(mongoName string) container.Modification {
+
+	return container.Apply(
+		container.WithName(ExporterName),
+		container.WithImage(ExporterImageRepo+":"+ExporterImageTag),
+		container.WithImagePullPolicy(ExporterImagePullPolicy),
+		container.WithResourceRequirements(resourcerequirements.Defaults()),
+		container.WithArgs(
+			[]string{
+				"--web.listen-address=:" + strconv.Itoa(ExporterPort),
+			},
+		),
+		container.WithPorts(
+			[]corev1.ContainerPort{
+				corev1.ContainerPort{
+					Name:          "metrics",
+					ContainerPort: ExporterPort,
+					Protocol:      corev1.ProtocolTCP,
+				},
+			},
+		),
+		container.WithReadinessProbe(
+			probes.Apply(
+				probes.WithHandler(
+					corev1.Handler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Path: "/",
+							Port: intstr.FromString("metrics"),
+						},
+					},
+				),
+				probes.WithInitialDelaySeconds(10),
+			),
+		),
+		container.WithLivenessProbe(
+			probes.Apply(
+				probes.WithHandler(
+					corev1.Handler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Path: "/",
+							Port: intstr.FromString("metrics"),
+						},
+					},
+				),
+				probes.WithInitialDelaySeconds(10),
+			),
+		),
+		container.WithEnvs(
+			corev1.EnvVar{
+				Name: "MONGODB_URI",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: mongoName + "-uri",
+						},
+						Key: "mongodb-uri",
+					},
+				},
+			},
+		),
+		container.WithSecurityContext(
+			corev1.SecurityContext{
+				AllowPrivilegeEscalation: &[]bool{false}[0],
+				ReadOnlyRootFilesystem:   &[]bool{true}[0],
+				RunAsNonRoot:             &[]bool{true}[0],
+				RunAsUser:                &[]int64{10000}[0],
+				RunAsGroup:               &[]int64{10000}[0],
+				Capabilities: &corev1.Capabilities{
+					Drop: []corev1.Capability{"all"},
+				},
+			},
+		),
+	)
+
 }

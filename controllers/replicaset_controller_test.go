@@ -135,7 +135,7 @@ func TestStatefulSet_IsCorrectlyConfigured(t *testing.T) {
 	err = mgr.GetClient().Get(context.TODO(), types.NamespacedName{Name: mdb.Name, Namespace: mdb.Namespace}, &sts)
 	assert.NoError(t, err)
 
-	assert.Len(t, sts.Spec.Template.Spec.Containers, 2)
+	assert.Len(t, sts.Spec.Template.Spec.Containers, 3)
 
 	agentContainer := sts.Spec.Template.Spec.Containers[1]
 	assert.Equal(t, construct.AgentName, agentContainer.Name)

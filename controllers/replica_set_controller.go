@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
+	"reflect"
+	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
 
@@ -30,6 +33,9 @@ import (
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/annotations"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/podtemplatespec"
+	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/secret"
+
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
 	mdbv1 "github.com/mongodb/mongodb-kubernetes-operator/api/v1"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/automationconfig"
@@ -54,6 +60,10 @@ const (
 	clusterDNSName = "CLUSTER_DNS_NAME"
 
 	lastSuccessfulConfiguration = "mongodb.com/v1.lastSuccessfulConfiguration"
+
+	metricsUsername     = "metrics"
+	prometheusNamespace = "monitoring"
+	prometheusName      = "app-prometheus"
 )
 
 func init() {
@@ -122,6 +132,58 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return result.Failed()
 	}
 
+	r.log.Debug("Ensuring the MongoDB metrics user secret exists")
+	if err := r.ensureMetricsUserSecret(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the metrics user secret exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
+	metricsUser := mdbv1.MongoDBUser{
+		Name:              metricsUsername,
+		DB:                "admin",
+		PasswordSecretRef: mdbv1.SecretKeyReference{Name: mdb.Name + "-metrics-user"},
+		Roles: []mdbv1.Role{
+			mdbv1.Role{
+				Name: "clusterMonitor",
+				DB:   "admin",
+			},
+			mdbv1.Role{
+				Name: "read",
+				DB:   "local",
+			},
+			mdbv1.Role{
+				Name: "find",
+				DB:   "admin",
+			},
+		},
+		ScramCredentialsSecretName: mdb.Name + "-metrics-user",
+	}
+
+	contains := false
+	for i, value := range mdb.Spec.Users {
+		if value.Name == "metrics" {
+			contains = true
+			mdb.Spec.Users[i] = metricsUser
+			break
+		}
+	}
+	if contains == false {
+		r.log.Debug("Adding metrics user")
+		mdb.Spec.Users = append(mdb.Spec.Users, metricsUser)
+	}
+
+	r.log.Debug("Ensuring the MongoDB URI secret exists")
+	if err := r.ensureMongoDbUriSecret(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the MongoDB URI secret exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
 	r.log = zap.S().With("ReplicaSet", request.NamespacedName)
 	r.log.Infow("Reconciling MongoDB", "MongoDB.Spec", mdb.Spec, "MongoDB.Status", mdb.Status)
 
@@ -139,6 +201,24 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return status.Update(r.client.Status(), &mdb,
 			statusOptions().
 				withMessage(Error, fmt.Sprintf("Error ensuring the service exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
+	r.log.Debug("Ensuring the exporter service exists")
+	if err := r.ensureExporterService(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the exporter service exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
+	r.log.Debug("Ensuring the exporter service monitor exists")
+	if err := r.ensureExporterServiceMonitor(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the exporter service monitor exists: %s", err)).
 				withFailedPhase(),
 		)
 	}
@@ -375,6 +455,16 @@ func (r *ReplicaSetReconciler) deployMongoDBReplicaSet(mdb mdbv1.MongoDBCommunit
 		})
 }
 
+func (r *ReplicaSetReconciler) ensureExporterService(mdb mdbv1.MongoDBCommunity) error {
+	svc := buildExporterService(mdb)
+	err := r.client.Create(context.TODO(), &svc)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The exporter service already exists... moving forward: %s", err)
+		return nil
+	}
+	return err
+}
+
 func (r *ReplicaSetReconciler) ensureService(mdb mdbv1.MongoDBCommunity) error {
 	svc := buildService(mdb)
 	err := r.client.Create(context.TODO(), &svc)
@@ -383,6 +473,64 @@ func (r *ReplicaSetReconciler) ensureService(mdb mdbv1.MongoDBCommunity) error {
 		return nil
 	}
 	return err
+}
+
+func (r *ReplicaSetReconciler) ensureMongoDbUriSecret(mdb mdbv1.MongoDBCommunity) error {
+	password, err := secret.ReadKey(
+		r.client,
+		"password",
+		types.NamespacedName{
+			Name:      mdb.Name + "-metrics-user",
+			Namespace: mdb.Namespace,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	uri_secret := buildMongoDbUriSecret(mdb, password)
+	err = r.client.Create(context.TODO(), &uri_secret)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The mongodb URI secret already exists... moving forward: %s", err)
+		return nil
+	}
+	return err
+}
+
+func (r *ReplicaSetReconciler) ensureMetricsUserSecret(mdb mdbv1.MongoDBCommunity) error {
+	metricsSecret := corev1.Secret{}
+	err := r.client.Get(
+		context.TODO(),
+		types.NamespacedName{
+			Name:      mdb.Name + "-metrics-user",
+			Namespace: mdb.Namespace,
+		},
+		&metricsSecret,
+	)
+	err = k8sClient.IgnoreNotFound(err)
+	if err != nil {
+		return errors.Errorf("error getting metrics Secret: %s", err)
+	}
+	if reflect.DeepEqual(metricsSecret, corev1.Secret{}) { // metricsSecret == corev1.Secret{}) {
+		var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+		password := make([]rune, 32)
+		for i := range password {
+			password[i] = letters[rand.Intn(len(letters))]
+		}
+
+		metricsSecret := secret.Builder().
+			SetName(mdb.Name+"-metrics-user").
+			SetNamespace(mdb.Namespace).
+			SetField("password", string(password)).
+			Build()
+		err := r.client.Create(context.TODO(), &metricsSecret)
+		if err != nil && apiErrors.IsAlreadyExists(err) {
+			r.log.Infof("The metrics user secret already exists... moving forward: %s", err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *ReplicaSetReconciler) createOrUpdateStatefulSet(mdb mdbv1.MongoDBCommunity) error {
@@ -433,6 +581,38 @@ func buildAutomationConfig(mdb mdbv1.MongoDBCommunity, auth automationconfig.Aut
 		SetAuth(auth).
 		AddModifications(getMongodConfigModification(mdb)).
 		AddModifications(modifications...).
+		Build()
+}
+
+// buildMongoDbUriSecret creates a Secret that will be used by the prometheus exporter
+func buildMongoDbUriSecret(mdb mdbv1.MongoDBCommunity, password string) corev1.Secret {
+	fullUri := fmt.Sprintf(
+		"mongodb://%s:%s@%s/?authSource=admin&replicaSet=%s&compressors=disabled&gssapiServiceName=mongodb",
+		metricsUsername,
+		password,
+		strings.Join(mdb.Hosts(), ","),
+		mdb.Name,
+	)
+	return secret.Builder().
+		SetName(mdb.Name+"-uri").
+		SetNamespace(mdb.Namespace).
+		SetField("mongodb-uri", fullUri).
+		Build()
+}
+
+// buildExporterService creates a Service that will be used for the prometheus exporter
+func buildExporterService(mdb mdbv1.MongoDBCommunity) corev1.Service {
+	label := make(map[string]string)
+	label["app"] = mdb.ServiceName()
+	return service.Builder().
+		SetName(mdb.Name + "-exporter-svc").
+		SetNamespace(mdb.Namespace).
+		SetLabels(label).
+		SetSelector(label).
+		SetServiceType(corev1.ServiceTypeClusterIP).
+		SetClusterIP("None").
+		SetPort(9216).
+		SetPublishNotReadyAddresses(true).
 		Build()
 }
 
@@ -547,6 +727,46 @@ func buildStatefulSetModificationFunction(mdb mdbv1.MongoDBCommunity) statefulse
 
 		statefulset.WithCustomSpecs(mdb.Spec.StatefulSetConfiguration.SpecWrapper.Spec),
 	)
+}
+
+func (r *ReplicaSetReconciler) ensureExporterServiceMonitor(mdb mdbv1.MongoDBCommunity) error {
+	svcMon := &monitoringv1.ServiceMonitor{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "monitoring.coreos.com/v1",
+			Kind:       "ServiceMonitor",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      mdb.Name + "-exporter",
+			Namespace: prometheusNamespace,
+			Labels: map[string]string{
+				"prometheus": prometheusName,
+			},
+		},
+		Spec: monitoringv1.ServiceMonitorSpec{
+			Endpoints: []monitoringv1.Endpoint{
+				monitoringv1.Endpoint{
+					Interval:      "30s",
+					Path:          "/metrics",
+					Scheme:        "http",
+					ScrapeTimeout: "30s",
+				},
+			},
+			NamespaceSelector: monitoringv1.NamespaceSelector{
+				MatchNames: []string{mdb.Namespace},
+			},
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": mdb.ServiceName(),
+				},
+			},
+		},
+	}
+	err := r.client.Create(context.TODO(), svcMon)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The service monitor already exists... moving forward: %s", err)
+		return nil
+	}
+	return err
 }
 
 func getOwnerReference(mdb mdbv1.MongoDBCommunity) metav1.OwnerReference {
