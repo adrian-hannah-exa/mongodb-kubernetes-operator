@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"os"
+	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
 
@@ -16,8 +17,10 @@ import (
 )
 
 const (
-	backupUsername       = "backup"
-	MongodbBackupRootEnv = "MONGODB_BACKUP_ROOT"
+	backupUsername              = "backup"
+	MongodbBackupRootEnv        = "MONGODB_BACKUP_ROOT"
+	MongodbBackupImageEnv       = "MONGODB_BACKUP_IMAGE"
+	MongodbBackupPullSecretsEnv = "MONGODB_BACKUP_IMAGE_PULL_SECRETS"
 
 	gcpCredsSecretName = "data-backuper-credentials"
 	gcpCredsSecretKey  = "GOOGLE_SERVICE_ACCOUNT_JSON_KEY"
@@ -35,14 +38,23 @@ func (r *ReplicaSetReconciler) ensureBackupCronJob(mdb mdbv1.MongoDBCommunity) e
 
 // buildBackupCronJob creates a CronJob that will create a backup of the mongo database
 func buildBackupCronJob(mdb mdbv1.MongoDBCommunity) batchv1beta1.CronJob {
+	backupImg := os.Getenv(MongodbBackupImageEnv)
+	backupPullSecrets := os.Getenv(MongodbBackupPullSecretsEnv)
 	backupRoot := os.Getenv(MongodbBackupRootEnv)
+
+	pullSecrets := podtemplatespec.NOOP()
+	if backupPullSecrets != "" {
+		for _, i := range strings.Split(backupPullSecrets, ",") {
+			pullSecrets = podtemplatespec.Apply(pullSecrets, podtemplatespec.WithImagePullSecrets(i))
+		}
+	}
 
 	var podSpec corev1.PodTemplateSpec
 	mods := podtemplatespec.Apply(
 		podtemplatespec.WithContainer(
 			"mongodb-backup",
 			container.Apply(
-				container.WithImage("gcr.io/exa-cloud-utils/exabeamcloud/mongodb-backup:latest"),
+				container.WithImage(backupImg),
 				container.WithArgs([]string{
 					"/bin/sh",
 					"-c",
@@ -74,8 +86,7 @@ func buildBackupCronJob(mdb mdbv1.MongoDBCommunity) batchv1beta1.CronJob {
 				),
 			),
 		),
-		podtemplatespec.WithImagePullSecrets("gcr"),
-		podtemplatespec.WithImagePullSecrets("artifactory"),
+		pullSecrets,
 		podtemplatespec.WithVolume(corev1.Volume{
 			Name: "creds-json",
 			VolumeSource: corev1.VolumeSource{
