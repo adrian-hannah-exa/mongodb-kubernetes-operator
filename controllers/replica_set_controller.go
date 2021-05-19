@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/container"
+	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/secret"
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/util/functions"
 
@@ -33,7 +34,6 @@ import (
 
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/annotations"
 	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/podtemplatespec"
-	"github.com/mongodb/mongodb-kubernetes-operator/pkg/kube/secret"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 
@@ -132,6 +132,8 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return result.Failed()
 	}
 
+	backupUser := insertBackupUser(&mdb)
+
 	r.log.Debug("Ensuring the MongoDB metrics user secret exists")
 	if err := r.ensureMetricsUserSecret(mdb); err != nil {
 		return status.Update(r.client.Status(), &mdb,
@@ -175,11 +177,29 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		mdb.Spec.Users = append(mdb.Spec.Users, metricsUser)
 	}
 
+	r.log.Debug("Ensuring the MongoDB backup user secret exists")
+	if err := r.createUserSecret(mdb, backupUser); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the backup user secret exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
 	r.log.Debug("Ensuring the MongoDB URI secret exists")
 	if err := r.ensureMongoDbUriSecret(mdb); err != nil {
 		return status.Update(r.client.Status(), &mdb,
 			statusOptions().
 				withMessage(Error, fmt.Sprintf("Error ensuring the MongoDB URI secret exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
+	r.log.Debug("Ensuring the backup MongoDB URI secret exists")
+	if err := r.ensureMongoDbUriSecret(mdb, backupUser); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the backup MongoDB URI secret exists: %s", err)).
 				withFailedPhase(),
 		)
 	}
@@ -219,6 +239,15 @@ func (r ReplicaSetReconciler) Reconcile(ctx context.Context, request reconcile.R
 		return status.Update(r.client.Status(), &mdb,
 			statusOptions().
 				withMessage(Error, fmt.Sprintf("Error ensuring the exporter service monitor exists: %s", err)).
+				withFailedPhase(),
+		)
+	}
+
+	r.log.Debug("Ensuring the backup CronJob exists")
+	if err := r.ensureBackupCronJob(mdb); err != nil {
+		return status.Update(r.client.Status(), &mdb,
+			statusOptions().
+				withMessage(Error, fmt.Sprintf("Error ensuring the backup cronjob exists: %s", err)).
 				withFailedPhase(),
 		)
 	}
@@ -788,4 +817,77 @@ func getDomain(service, namespace, clusterName string) string {
 // if this is not the case, then we should ensure to skip past the annotation check otherwise the pods will remain in pending state forever.
 func isPreReadinessInitContainerStatefulSet(sts appsv1.StatefulSet) bool {
 	return container.GetByName(construct.ReadinessProbeContainerName, sts.Spec.Template.Spec.InitContainers) == nil
+}
+
+func (r *ReplicaSetReconciler) createUserSecret(mdb mdbv1.MongoDBCommunity, user mdbv1.MongoDBUser) error {
+	userSecret := corev1.Secret{}
+	err := r.client.Get(
+		context.TODO(),
+		types.NamespacedName{
+			Name:      user.PasswordSecretRef.Name,
+			Namespace: mdb.Namespace,
+		},
+		&userSecret,
+	)
+	err = k8sClient.IgnoreNotFound(err)
+	if err != nil {
+		return errors.Errorf("error getting %s Secret: %s", user.Name, err)
+	}
+	if reflect.DeepEqual(userSecret, corev1.Secret{}) {
+		var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+		password := make([]rune, 32)
+		for i := range password {
+			password[i] = letters[rand.Intn(len(letters))]
+		}
+
+		userSecret := secret.Builder().
+			SetName(user.PasswordSecretRef.Name).
+			SetNamespace(mdb.Namespace).
+			SetField(user.GetPasswordSecretKey(), string(password)).
+			Build()
+		err := r.client.Create(context.TODO(), &userSecret)
+		if err != nil && apiErrors.IsAlreadyExists(err) {
+			r.log.Infof("The %s user secret already exists... moving forward: %s", user.Name, err)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *ReplicaSetReconciler) ensureMongoDbUriSecret(mdb mdbv1.MongoDBCommunity, user mdbv1.MongoDBUser) error {
+	password, err := secret.ReadKey(
+		r.client,
+		user.GetPasswordSecretKey(),
+		types.NamespacedName{
+			Name:      user.PasswordSecretRef.Name,
+			Namespace: mdb.Namespace,
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	uriSecret := buildMongoDbUriSecret(mdb, user.Name, password)
+	err = r.client.Create(context.TODO(), &uriSecret)
+	if err != nil && apiErrors.IsAlreadyExists(err) {
+		r.log.Infof("The mongodb URI secret already exists... moving forward: %s", err)
+		return nil
+	}
+	return err
+}
+
+func buildMongoDbUriSecret(mdb mdbv1.MongoDBCommunity, username string, password string) corev1.Secret {
+	fullUri := fmt.Sprintf(
+		"mongodb://%s:%s@%s/?authSource=admin&replicaSet=%s&compressors=disabled&gssapiServiceName=mongodb",
+		username,
+		password,
+		strings.Join(mdb.Hosts(), ","),
+		mdb.Name,
+	)
+	return secret.Builder().
+		SetName(fmt.Sprintf("%s-%s-uri", mdb.Name, username)).
+		SetNamespace(mdb.Namespace).
+		SetField("mongodb-uri", fullUri).
+		Build()
 }
