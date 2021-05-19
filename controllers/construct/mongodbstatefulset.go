@@ -55,6 +55,7 @@ const (
 	ExporterImageTag        = "0.20.4"
 	ExporterImagePullPolicy = corev1.PullIfNotPresent
 	ExporterPort            = 9216
+	ExporterUsername        = "metrics"
 
 	MongodbUserCommand = `current_uid=$(id -u)
 declare -r current_uid
@@ -384,7 +385,7 @@ func exporterContainer(mongoName string) container.Modification {
 				ValueFrom: &corev1.EnvVarSource{
 					SecretKeyRef: &corev1.SecretKeySelector{
 						LocalObjectReference: corev1.LocalObjectReference{
-							Name: mongoName + "-uri",
+							Name: fmt.Sprintf("%s-%s-uri", mongoName, ExporterUsername),
 						},
 						Key: "mongodb-uri",
 					},

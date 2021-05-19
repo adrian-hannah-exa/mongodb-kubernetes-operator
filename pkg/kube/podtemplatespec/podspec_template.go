@@ -100,6 +100,13 @@ func WithPodLabels(labels map[string]string) Modification {
 	}
 }
 
+// WithRestartPolicy sets the PodTemplateSpec's restart policy
+func WithRestartPolicy(restartPolicy corev1.RestartPolicy) Modification {
+	return func(podTemplateSpec *corev1.PodTemplateSpec) {
+		podTemplateSpec.Spec.RestartPolicy = restartPolicy
+	}
+}
+
 // WithServiceAccount sets the PodTemplateSpec's ServiceAccount name
 func WithServiceAccount(serviceAccountName string) Modification {
 	return func(podTemplateSpec *corev1.PodTemplateSpec) {
